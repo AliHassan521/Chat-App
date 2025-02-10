@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "../supabaseClient";
+import "./App.css"; // Import the CSS file for styling
 
 function App() {
   const [session, setSession] = useState([]);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [usersOnline, setUsersOnline] = useState([]);
+
+  const chatContainerRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -22,100 +24,155 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  console.log(session);
-
-  // sign in
+  // Sign in
   const signIn = async () => {
     await supabase.auth.signInWithOAuth({
       provider: "google",
     });
   };
 
-  // sign out
+  // Sign out
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
   };
 
-  useEffect(()=>{
-    if(!session?.user){
+  useEffect(() => {
+    if (!session?.user) {
       setUsersOnline([]);
       return;
-    } 
-    const roomOne = supabase.channel('room-one',{
+    }
+
+    const roomOne = supabase.channel("room_one", {
       config: {
         presence: {
           key: session?.user?.id,
-        }
-      }
-    })
+        },
+      },
+    });
 
-    roomOne.on('broadcast', {event: 'message'}, (payload)=>{
-      setMessages((prevMessages)=>[...prevMessages, payload.payload]);
-      console.log(messages);
-    })
+    roomOne.on("broadcast", { event: "message" }, (payload) => {
+      setMessages((prevMessages) => [...prevMessages, payload.payload]);
+    });
 
-    // track user presence subscription
-    roomOne.subscribe(async(status) =>{
-      if(status === 'subscribed'){
+    // Track user presence
+    roomOne.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
         await roomOne.track({
           id: session?.user?.id,
-        })
+        });
       }
-    })
+    });
 
-    // handle user presence
-    roomOne.on('presence', {event : "sync"} , ()=>{
-      const state = roomOne.presenceState(); 
+    // Handle user presence
+    roomOne.on("presence", { event: "sync" }, () => {
+      const state = roomOne.presenceState();
       setUsersOnline(Object.keys(state));
-    })
+    });
 
     return () => {
       roomOne.unsubscribe();
+    };
+  }, [session]);
+
+  // Send message
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim()) return; // Prevent empty messages
+
+    supabase.channel("room_one").send({
+      type: "broadcast",
+      event: "message",
+      payload: {
+        message: newMessage,
+        user_name: session?.user?.user_metadata?.email,
+        avatar: session?.user?.user_metadata?.avatar_url,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    setNewMessage("");
+  };
+
+  // Format timestamp
+  const formatTime = (isoString) => {
+    return new Date(isoString).toLocaleTimeString("en-us", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  };
+
+  // Auto-scroll to the bottom
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
     }
-    
-  },[session])
-
-  
-
+  }, [messages]);
 
   if (!session) {
     return (
-      <div className="w-full flex h-screen justify-center items-center">
-        <button onClick={signIn}>Sign in with Google</button>
+      <div className="auth-container">
+        <button onClick={signIn} className="sign-in-button">
+          Sign in with Google to chat
+        </button>
       </div>
     );
   } else {
     return (
-      <div className="w-full flex h-screen justify-center items-center p-4">
-        <div className="border-[1px] border-gray-700 max-w-6xl w-full min-h-[600px] rounded-lg">
-          {/* Header */}
-          <div className="flex justify-between h-20 border-b-[1px] border-gray-700">
-            <div className="p-4">
-              <p className="text-gray-300">
-                signed in as name {session?.user?.user_metadata?.full_name}
-              </p>
-              <p className="text-gray-300 italic text-sm">3 user login</p>
-            </div>
-            <button onClick={signOut} className="m-2 sm:mr-4">
-              Sign out
-            </button>
+      <div className="chat-app">
+        {/* Header */}
+        <div className="chat-header">
+          <div className="header-content">
+            <p className="user-email">{session?.user?.user_metadata?.email}</p>
+            <p className="online-users">{usersOnline.length} users online</p>
           </div>
-          {/* main chat */}
-          <div className="p-4 flex flex-col overflow-y-auto h-[500px]"></div>
-          {/* message input */}
-          <form className="flex flex-col sm:flex-row p-4 border-t-[1px] border-gray-700">
-            <input
-              type="text"
-              placeholder="Type a message..."
-              className="p-2 w-full bg-[#00000040] rounded-lg"
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-            />
-            <button className="mt-4 sm:mt-0 sm:ml-8 text-white max-h-12">
-              Send
-            </button>
-          </form>
+          <button onClick={signOut} className="sign-out-button">
+            Sign out
+          </button>
         </div>
+
+        {/* Chat Messages */}
+        <div ref={chatContainerRef} className="chat-messages">
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              className={`message ${
+                msg?.user_name === session?.user?.email
+                  ? "message-sent"
+                  : "message-received"
+              }`}
+            >
+              {/* Avatar for received messages */}
+              {msg?.user_name !== session?.user?.email && (
+                <img src={msg?.avatar} alt="avatar" className="avatar" />
+              )}
+
+              {/* Message Content */}
+              <div className="message-content">
+                <div className="message-text">{msg.message}</div>
+                <div className="timestamp">{formatTime(msg?.timestamp)}</div>
+              </div>
+
+              {/* Avatar for sent messages */}
+              {msg?.user_name === session?.user?.email && (
+                <img src={msg?.avatar} alt="avatar" className="avatar" />
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Message Input */}
+        <form onSubmit={sendMessage} className="message-input">
+          <input
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            type="text"
+            placeholder="Type a message..."
+            className="input-field"
+          />
+          <button type="submit" className="send-button">
+            Send
+          </button>
+        </form>
       </div>
     );
   }
